@@ -11,7 +11,7 @@ use std::{
 use ldk_node::{bitcoin, bitcoin::{secp256k1::PublicKey, Network}, config::ChannelConfig, lightning::{
     ln::msgs::SocketAddress,
     offers::offer::Offer,
-}, lightning_invoice::Bolt11Invoice, payment::SendingParameters, Builder, ChannelDetails, Node};
+}, lightning_invoice::Bolt11Invoice, payment::SendingParameters, Builder, ChannelDetails, Event, Node};
 
 use lightning::ln::types::ChannelId;
 use ureq::Agent;
@@ -202,7 +202,12 @@ fn main() {
                         let bolt11: ldk_node::payment::Bolt11Payment = user.bolt11_payment();
                         let invoice = bolt11.receive(msats, "test invoice", 6000);
                         match invoice {
-                            Ok(inv) => println!("User Invoice: {}", inv),
+                            Ok(inv) => {
+                                let inv = inv;
+                                let payment_id =*inv.payment_hash();
+                                println!("payment_id: {}", payment_id);
+                                println!("invoice: {}", inv);
+                            },
                             Err(e) => println!("Error creating invoice: {}", e),
                         }
                     } else {
@@ -212,11 +217,33 @@ fn main() {
                 (Some("payinvoice"), [invoice_str]) => {
                     let bolt11_invoice = invoice_str.parse::<Bolt11Invoice>();
                     match bolt11_invoice {
-                        Ok(invoice) => match user.bolt11_payment().send(&invoice, None) {
-                            Ok(payment_id) => {
-                                println!("Payment sent from User with payment_id: {}", payment_id)
+                        Ok(invoice) => {
+                            match user.bolt11_payment().send(&invoice, None) {
+                                Ok(payment_id) => {
+                                    println!("Payment sent from User with payment_id: {}", payment_id);
+                                    match user.wait_next_event() {
+                                        ldk_node::Event::PaymentSuccessful {
+                                            payment_hash,
+                                            payment_id,
+                                            fee_paid_msat
+                                        } => {
+                                            let payment_id = payment_id.unwrap();
+                                            let payment = user.payment(&payment_id).unwrap();
+                                            if let ldk_node::payment::PaymentKind::Bolt11 { preimage, .. } = payment.kind {
+                                                if let Some(preimage) = preimage {
+                                                    println!("Payment preimage: {}", preimage);
+                                                } else {
+                                                    println!("Payment successful but preimage not available yet");
+                                                }
+                                            }
+                                        },
+                                        e => {println!("unexpected Event {:?}",e)}
+
+                                    }
+
+                                }
+                                Err(e) => println!("Error sending payment from User: {}", e),
                             }
-                            Err(e) => println!("Error sending payment from User: {}", e),
                         },
                         Err(e) => println!("Error parsing invoice: {}", e),
                     }
@@ -276,7 +303,6 @@ fn main() {
                         Err(_) => println!("Invalid amount of satoshis provided"),
                     }
                 }
-
                 (Some("getaddress"), []) => {
                     let funding_address = lsp.onchain_payment().new_address();
                     match funding_address {
@@ -361,4 +387,5 @@ fn main() {
         }
     }
 }
+
 
